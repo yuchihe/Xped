@@ -477,6 +477,39 @@ The PEPS code of Xped is located in `Xped/PEPS` and has the following capabiliti
 * Imaginary time evolution using the simple update method with nearest and next-nearest Hamiltonian terms
 * Direct energy-minimization using automatic differentiation
 
+### Exact energy slicing
+
+For the Eigen backend, `avg` and `CTMSolver` use exact energy slicing for real double-precision U0 two-site observables with `TRank=2` and `ALL_OUT_LEGS=false`.
+The explicit entry point `avg_sliced(env, op, block_size=8)` selects the maximum number of boundary rows processed together; the width must be positive.
+The evaluator supports site-dependent physical and virtual dimensions and the unit-cell pattern carried by the supplied tensors. Other scalar types, symmetries, and CTM layouts retain the existing observable path.
+
+Each interaction is decomposed by a complete operator Schmidt SVD, with no rank truncation.
+The calculation loops over the resulting operator channels, sums their ket/bra physical indices before forming large boundary intermediates, and processes blocks of a free boundary chi leg.
+Horizontal and vertical nearest-neighbor terms retain their original 2-by-1 and 1-by-2 contraction geometries; the two diagonal terms retain their 2-by-2 geometry.
+Each bond uses the normalization of its own geometry and evaluates the full supplied operator at finite chi, agreeing with the untruncated contraction network up to floating-point roundoff.
+
+The historical diagonal observable path used `tSVD` with multiplet preservation enabled, which can discard trailing operator components even with an unlimited rank and zero threshold.
+The sliced path retains every nonzero operator channel, so a general diagonal operator can give a different result from that historical calculation.
+For a full reference using the original contraction network, first compute the RDMs and call `avg_unsliced(env, op, false)`; its default `preserve_operator_multiplets=true` retains the historical behavior used by fallback paths.
+
+The reverse pass replays one operator contribution at a time on the native nested AD tape, while corner workspaces and their backward passes are processed in boundary blocks.
+It accumulates gradients into every shared site and boundary input, including both occurrences of the site tensor in the double layer, and differentiates the normalization denominator.
+This keeps per-contribution intermediates off the outer tape. Explicit output corners and their adjoints remain stored: slicing reduces temporary workspace, not every part of the memory footprint.
+For example, with double precision, D=6 and chi=64, an individual enlarged-corner workspace falls from 40.5 MiB to 5.0625 MiB with eight boundary rows; the complete enlarged corner remains 40.5 MiB.
+
+An earlier diagonal-only reflection benchmark for the spin-1/2 Heisenberg interaction measured the following results at D=6, chi=64, with 32 CTMRG updates from a fixed imported boundary and two BLAS/OpenMP threads:
+
+| Boundary topology | Whole-job peak RSS, baseline -> sliced | Absolute energy difference | Relative L2 tensor-gradient difference |
+| --- | --- | --- | --- |
+| Two | 20.8978 -> 3.9793 GiB | 1.30e-14 | 2.16e-12 |
+| Four | 20.9033 -> 4.0008 GiB | 1.41e-13 | 2.47e-11 |
+
+That benchmark's exact evaluator used the complete three-product Heisenberg interaction; its nonzero operator channels are unaffected by the historical cutoff described above.
+These measurements combine exact operator decomposition, contraction scheduling, and checkpoint replay; they do not isolate the boundary loop.
+They are single shared-host samples of the earlier NNN implementation, whose NN calculation was unchanged, and do not establish a performance gain for the NN extension.
+The full tensor gradients were compared with the original calculation; these high-chi runs did not perform finite differences.
+Their derivatives are through the 32 finite CTMRG updates, rather than an implicit fixed-point derivative.
+
 For PEPS simulations, the configuration is parsed as a toml file.
 The toml file has sections for CTM, imaginary time evolution and nonlinear optimization.
 The used model is specified in the section `[model]` and needs to be present in all simulations:

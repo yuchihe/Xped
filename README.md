@@ -86,6 +86,14 @@ All build options can be seen in the following table.
 | `XPED_USE_SCALAPACK` | `OFF` | Enable scalapack linking (only useful for MPI programs). |
 | `XPED_VECTOR_LIB` | `Eigen` | Used vector library for plain tensor operations. |
 
+## PEPS energy evaluation
+
+The Eigen backend evaluates real double-precision U0 two-site observables with exact slicing for horizontal/vertical nearest-neighbor bonds and both next-nearest-neighbor diagonals (`TRank=2`, `ALL_OUT_LEGS=false`).
+`avg` and `CTMSolver` select this path automatically; `avg_sliced(env, op, block_size=8)` exposes the boundary block width.
+Interaction and physical-index contributions are evaluated in turn, and native AD replays each contribution while accumulating tensor and boundary gradients, including the normalization derivative.
+The complete operator is retained, including channels that the historical diagonal observable cutoff could discard.
+See [exact energy slicing](docs/main.md#exact-energy-slicing) for the untruncated reference, contraction geometry, memory limits, and benchmark scope.
+
 # Documentation
 
 Browse the [documenation](https://cpp977.github.io/Xped "docs") to learn about the capabilities of the library.

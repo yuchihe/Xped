@@ -2,6 +2,7 @@
 
 #include "Xped/AD/finite_diff.hpp"
 #include "Xped/PEPS/CTMSolver.hpp"
+#include "Xped/PEPS/LinearAlgebra.hpp"
 #include "Xped/Util/Logging.hpp"
 #include "Xped/Util/Stopwatch.hpp"
 
@@ -56,7 +57,11 @@ CTMSolver<Scalar, Symmetry, HamScalar, ALL_OUT_LEGS, CPOpts, TRank>::solve(std::
     for(std::size_t step = 0; step < opts.max_presteps; ++step) {
         util::Stopwatch<> move_t;
         Jack.grow_all();
-        Jack.computeRDM();
+        if constexpr(detail::supports_sliced_energy<Scalar, Symmetry, TRank, ALL_OUT_LEGS, HamScalar>) {
+            Jack.HAS_RDM = false;
+        } else {
+            Jack.computeRDM();
+        }
         auto Hobs = H.asObservable();
         auto [E_h, E_v, E_d1, E_d2] = avg(Jack, Hobs);
         E = (E_h.sum() + E_v.sum() + E_d1.sum() + E_d2.sum()) / Jack.cell().uniqueSize();
@@ -93,7 +98,12 @@ CTMSolver<Scalar, Symmetry, HamScalar, ALL_OUT_LEGS, CPOpts, TRank>::solve(std::
             CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts> Jim(Jack);
             Jim.set_A(Psi_ad);
             Jim.Psi()->updateAdags();
-            Jim.solve(opts.track_steps);
+            if constexpr(detail::supports_sliced_energy<Scalar, Symmetry, TRank, ALL_OUT_LEGS, HamScalar>) {
+                for(std::size_t step = 0; step < opts.track_steps; ++step) { Jim.template grow_all<ENABLE_AD>(); }
+                Jim.HAS_RDM = false;
+            } else {
+                Jim.solve(opts.track_steps);
+            }
             auto Hobs = H.asObservable();
             auto [E_h, E_v, E_d1, E_d2] = avg(Jim, Hobs);
             auto res = (E_h.sum() + E_v.sum() + E_d1.sum() + E_d2.sum()) / Jim.cell().uniqueSize();
