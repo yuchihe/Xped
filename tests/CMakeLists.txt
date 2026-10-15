@@ -74,6 +74,15 @@ target_link_libraries (ad_test test_suite)
 
 doctest_discover_tests(ad_test TEST_PREFIX ad__)#ADD_LABELS "1")
 
+if(XPED_USE_AD AND XPED_MATRIX_LIB STREQUAL "Eigen")
+  add_executable(corner_blocking_test corner_blocking.cpp)
+  target_link_libraries(corner_blocking_test PRIVATE Xped)
+  add_test(NAME corner_blocking COMMAND corner_blocking_test)
+  add_executable(corner_ctm_test corner_ctm.cpp)
+  target_link_libraries(corner_ctm_test PRIVATE Xped)
+  add_test(NAME corner_ctm COMMAND corner_ctm_test)
+endif()
+
 # if(XPED_USE_MPI)
 #   add_test(NAME MPS COMMAND ${MPIEXEC_EXECUTABLE} --mca opal_warn_on_missing_libcuda 0 ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS} ./mps_test ${MPIEXEC_POSTFLAGS})
 # else()

@@ -226,7 +226,7 @@ function(set_project_options project_name)
     target_compile_definitions(${project_name} INTERFACE EIGEN_USE_BLAS=1)
     if(XPED_USE_LAPACK)
       target_compile_definitions(${project_name} INTERFACE EIGEN_USE_LAPACKE=1)
-      target_compile_definitions(${project_name} INTERFACE XPED_DONT_USE_BDCSVD=1)
+      # Keep BDCSVD as the default: Eigen dispatches it to LAPACK gesdd.
     endif()
   endif()
 
@@ -235,7 +235,7 @@ function(set_project_options project_name)
     if(${XPED_MATRIX_LIB} STREQUAL "Eigen")
       target_compile_definitions(${project_name} INTERFACE EIGEN_USE_BLAS=1)
       target_compile_definitions(${project_name} INTERFACE EIGEN_USE_LAPACKE=1)
-      target_compile_definitions(${project_name} INTERFACE XPED_DONT_USE_BDCSVD=1)
+      # Keep BDCSVD as the default: Eigen dispatches it to MKL gesdd.
       target_compile_definitions(${project_name} INTERFACE EIGEN_USE_MKL_VML=1)
     endif()
   endif()

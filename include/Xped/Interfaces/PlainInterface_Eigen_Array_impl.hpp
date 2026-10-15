@@ -122,7 +122,7 @@ struct PlainInterface : public MatrixInterface, public TensorInterface, public V
 #ifdef XPED_DONT_USE_BDCSVD
         Eigen::JacobiSVD<MType<typename Derived::Scalar>> Jack; // standard SVD
 #else
-        Eigen::BDCSVD<MType<typename Derived::Scalar>> Jack; // "Divide and conquer" SVD (only available in Eigen)
+        Eigen::BDCSVD<MType<typename Derived::Scalar>> Jack; // Divide-and-conquer SVD; LAPACK gesdd when LAPACKE is enabled.
 #endif
 
         Jack.compute(M, Eigen::ComputeThinU | Eigen::ComputeThinV);

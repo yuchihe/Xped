@@ -119,7 +119,7 @@ PlainInterface::svd(const Eigen::MatrixBase<Derived>& M)
     Eigen::JacobiSVD<MType<typename Derived::Scalar>, Eigen::ComputeThinU | Eigen::ComputeThinV> Jack; // standard SVD
 #else
     Eigen::BDCSVD<MType<typename Derived::Scalar>, Eigen::ComputeThinU | Eigen::ComputeThinV>
-        Jack; // "Divide and conquer" SVD (only available in Eigen)
+        Jack; // Divide-and-conquer SVD; LAPACK gesdd when LAPACKE is enabled.
 #endif
 
     Jack.compute(M);
