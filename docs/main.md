@@ -399,6 +399,11 @@ It is an explicit specialization and of the `Tensor` class template.
 The underlying reverse-mode tape engine is self-contained and ships with Xped (`include/selfad`); it implements the small subset of the [stan/math](https://github.com/stan-dev/math "ad library") reverse-mode API that Xped uses (same `stan::math` namespace and include paths) without any external dependency.
 The original external stan-math backend can still be selected with `-DXPED_USE_EXTERNAL_STAN=ON` (plus the `external-stan` vcpkg feature), which additionally requires stan-math, TBB and SUNDIALS.
 
+With the Eigen matrix backend, CTM enlarged-corner contractions loop over blocks of a free boundary chi leg (up to eight multiplicity states per symmetry sector).
+The sliced leg enters the first contraction and remains free throughout the intermediate tensors; the complete output corner is still stored for the projector decomposition.
+The reverse pass recomputes and differentiates one block at a time on a nested tape, accumulating shared-input gradients and scattering the sliced-edge gradient.
+This also applies when corner checkpointing is enabled, so AD retains no collection of per-block intermediates on the outer tape.
+
 Let's look at an example usage of the AD functionality:
 \include ad.cpp
 
@@ -422,7 +427,10 @@ This part supports arbitrary ranked tensors and a wealth of operations including
 
 The Eigen library also supports the dispatch of fundamental matrix operations to external BLAS and LAPACK implementations.
 This feature can be used within Xped at configuration time using the `XPED_USE_BLAS` and similar options.
-If the intel math kernel library should be integrated, one can switch on the parameter `XPED_USE_MKL`.
+We recommend Intel MKL for BLAS and LAPACK; enable it with `-DXPED_USE_MKL=ON`.
+For SVD, the recommended driver is the divide-and-conquer `gesdd` (`dgesdd` for real double precision), rather than `gesvd`.
+Xped uses Eigen's `BDCSVD` by default, which dispatches to `gesdd` when LAPACKE is enabled (including MKL builds); without LAPACKE it uses Eigen's native implementation.
+The legacy `JacobiSVD`/`gesvd` path remains available by defining `XPED_DONT_USE_BDCSVD` at compile time.
 
 ## Cyclops tensor framework (ctf)
 
