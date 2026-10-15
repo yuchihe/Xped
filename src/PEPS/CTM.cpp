@@ -10,6 +10,7 @@
 #include "Xped/Core/CoeffUnaryOp.hpp"
 #include "Xped/IO/Matlab.hpp"
 #include "Xped/PEPS/PEPSContractions.hpp"
+#include "Xped/PEPS/CornerBlocking.hpp"
 
 #include "Xped/AD/reverse_pass_callback_alloc.hpp"
 
@@ -1645,6 +1646,109 @@ template <bool TRACK, bool CP>
 Tensor<Scalar, TRank + 1, TRank + 1, Symmetry, TRACK>
 CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>::contractCorner(const int x, const int y, const Opts::CORNER corner) XPED_CONST
 {
+#ifdef XPED_USE_EIGEN_MATRIX_LIB
+    // The open boundary leg enters the first contraction and survives every
+    // large intermediate. Replay each block separately in reverse mode,
+    // independently of the optional whole-corner checkpoint below.
+    if constexpr(ALL_OUT_LEGS) {
+        auto contraction = [c = C1s(0, 0), t = T1s(0, 0), a = A->As(0, 0), adag = A->Adags(0, 0)]
+                           <bool INNER>(const auto& slice) {
+            auto first = slice.adjoint().eval();
+            auto second = [&]() {
+                if constexpr(INNER) { return t.adjoint().eval(); }
+                else { return detail::corner_value(t).adjoint().eval(); }
+            }();
+            auto ct = c.template contract<std::array{-1, 1}, std::array{1, -2, -3, -4}, 1, INNER>(first);
+            auto tct = second.template contract<std::array{-1, 1, -2, -3}, std::array{1, -4, -5, -6}, 3, INNER>(ct.template twist<INNER>(0));
+            auto tcta = tct.template contract<std::array{-1, 1, -2, -3, 2, -4}, std::array{1, 2, -5, -6, -7}, 4, INNER>(a);
+            return tcta.template contract<std::array{-1, 1, -4, 2, -5, -2, 3}, std::array{1, 2, -6, -3, 3}, 3, INNER>(
+                adag.template twist<INNER>(3).template twist<INNER>(4));
+        };
+        return detail::blocked_corner<1, 3, TRACK>(T1s(0, 0), contraction);
+    } else {
+        switch(corner) {
+        case Opts::CORNER::UPPER_LEFT:
+            if constexpr(TRank == 2) {
+                auto contraction = [c = C1s(x - 1, y - 1), t = T4s(x - 1, y), a = A->As(x, y), adag = A->Adags(x, y)]
+                                   <bool INNER>(const auto& slice) {
+                    auto ct = c.template contract<std::array{-1, 1}, std::array{1, -2, -3, -4}, 1, INNER>(slice);
+                    auto tct = t.template contract<std::array{1, -1, -2, -3}, std::array{1, -4, -5, -6}, 3, INNER>(ct.template twist<INNER>(0));
+                    auto tcta = tct.template contract<std::array{-1, 1, -2, -3, 2, -4}, std::array{1, 2, -5, -6, -7}, 4, INNER>(a);
+                    return tcta.template contract<std::array{-1, 1, -4, 2, -5, -2, 3}, std::array{1, 2, 3, -6, -3}, 3, INNER>(
+                        adag.template twist<INNER>(3).template twist<INNER>(4));
+                };
+                return detail::blocked_corner<1, 3, TRACK>(T1s(x, y - 1), contraction);
+            } else if constexpr(TRank == 1) {
+                auto contraction = [c = C1s(x - 1, y - 1), t = T4s(x - 1, y), m = Ms(x, y)]<bool INNER>(const auto& slice) {
+                    auto ct = c.template contract<std::array{-1, 1}, std::array{1, -2, -3}, 1, INNER>(slice);
+                    auto tct = t.template contract<std::array{1, -1, -2}, std::array{1, -4, -5}, 2, INNER>(ct.template twist<INNER>(0));
+                    return tct.template contract<std::array{-1, 1, -3, 2}, std::array{1, 2, -4, -2}, 2, INNER>(m);
+                };
+                return detail::blocked_corner<1, 2, TRACK>(T1s(x, y - 1), contraction);
+            }
+            break;
+        case Opts::CORNER::LOWER_LEFT:
+            if constexpr(TRank == 2) {
+                auto contraction = [c = C4s(x - 1, y + 1), t = T4s(x - 1, y), a = A->As(x, y), adag = A->Adags(x, y)]
+                                   <bool INNER>(const auto& slice) {
+                    auto ct = c.template contract<std::array{-1, 1}, std::array{-2, -3, 1, -4}, 1, INNER>(slice);
+                    auto tct = t.template contract<std::array{-1, 1, -2, -3}, std::array{1, -4, -5, -6}, 3, INNER>(ct);
+                    auto tcta = tct.template contract<std::array{-1, 1, -2, 2, -3, -4}, std::array{1, -5, -6, 2, -7}, 4, INNER>(a.template twist<INNER>(3));
+                    return tcta.template contract<std::array{-4, 1, 2, -1, -5, -2, 3}, std::array{1, -6, 3, -3, 2}, 3, INNER>(adag.template twist<INNER>(3));
+                };
+                return detail::blocked_corner<3, 0, TRACK>(T3s(x, y + 1), contraction);
+            } else if constexpr(TRank == 1) {
+                auto contraction = [c = C4s(x - 1, y + 1), t = T4s(x - 1, y), m = Ms(x, y)]<bool INNER>(const auto& slice) {
+                    auto ct = c.template contract<std::array{-1, 1}, std::array{-2, 1, -3}, 1, INNER>(slice);
+                    auto tct = t.template contract<std::array{-1, 1, -2}, std::array{1, -3, -4}, 2, INNER>(ct);
+                    return tct.template contract<std::array{-3, 1, 2, -1}, std::array{1, -4, -2, 2}, 2, INNER>(m);
+                };
+                return detail::blocked_corner<2, 0, TRACK>(T3s(x, y + 1), contraction);
+            }
+            break;
+        case Opts::CORNER::UPPER_RIGHT:
+            if constexpr(TRank == 2) {
+                auto contraction = [c = C2s(x + 1, y - 1), t = T2s(x + 1, y), a = A->As(x, y), adag = A->Adags(x, y)]
+                                   <bool INNER>(const auto& slice) {
+                    auto tc = slice.template contract<std::array{-1, 1, -2, -3}, std::array{1, -4}, 3, INNER>(c);
+                    auto tct = tc.template contract<std::array{-1, -2, -3, 1}, std::array{-4, -5, 1, -6}, 3, INNER>(t);
+                    auto tcta = tct.template contract<std::array{-1, 1, -2, 2, -3, -4}, std::array{-5, 1, 2, -6, -7}, 4, INNER>(a.template twist<INNER>(2));
+                    return tcta.template contract<std::array{-1, 1, 2, -4, -2, -5, 3}, std::array{-3, 1, 3, 2, -6}, 3, INNER>(adag.template twist<INNER>(4));
+                };
+                return detail::blocked_corner<0, 0, TRACK>(T1s(x, y - 1), contraction);
+            } else if constexpr(TRank == 1) {
+                auto contraction = [c = C2s(x + 1, y - 1), t = T2s(x + 1, y), m = Ms(x, y)]<bool INNER>(const auto& slice) {
+                    auto tc = slice.template contract<std::array{-1, 1, -2}, std::array{1, -3}, 2, INNER>(c);
+                    auto tct = tc.template contract<std::array{-1, -2, 1}, std::array{-3, 1, -4}, 2, INNER>(t);
+                    return tct.template contract<std::array{-1, 1, 2, -3}, std::array{-2, 1, 2, -4}, 2, INNER>(m);
+                };
+                return detail::blocked_corner<0, 0, TRACK>(T1s(x, y - 1), contraction);
+            }
+            break;
+        case Opts::CORNER::LOWER_RIGHT:
+            if constexpr(TRank == 2) {
+                auto contraction = [c = C3s(x + 1, y + 1), t = T2s(x + 1, y), a = A->As(x, y), adag = A->Adags(x, y)]
+                                   <bool INNER>(const auto& slice) {
+                    auto ct = c.template twist<INNER>(1).template contract<std::array{-1, 1}, std::array{-2, -3, -4, 1}, 1, INNER>(slice);
+                    auto tct = t.template contract<std::array{-1, -2, -3, 1}, std::array{1, -4, -5, -6}, 3, INNER>(ct);
+                    auto tcta = tct.template contract<std::array{1, -1, -2, 2, -3, -4}, std::array{-5, -6, 1, 2, -7}, 4, INNER>(
+                        a.template twist<INNER>(2).template twist<INNER>(3));
+                    return tcta.template contract<std::array{1, -1, 2, -4, -5, -2, 3}, std::array{-6, -3, 3, 1, 2}, 3, INNER>(adag);
+                };
+                return detail::blocked_corner<2, 3, TRACK>(T3s(x, y + 1), contraction);
+            } else if constexpr(TRank == 1) {
+                auto contraction = [c = C3s(x + 1, y + 1), t = T2s(x + 1, y), m = Ms(x, y)]<bool INNER>(const auto& slice) {
+                    auto ct = c.template twist<INNER>(1).template contract<std::array{-1, 1}, std::array{-2, -3, 1}, 1, INNER>(slice);
+                    auto tct = t.template contract<std::array{-1, -2, 1}, std::array{1, -3, -4}, 2, INNER>(ct);
+                    return tct.template contract<std::array{1, -1, 2, -3}, std::array{-4, -2, 1, 2}, 2, INNER>(m);
+                };
+                return detail::blocked_corner<1, 2, TRACK>(T3s(x, y + 1), contraction);
+            }
+            break;
+        }
+    }
+    throw std::invalid_argument("Unsupported CTM corner");
+#else
     constexpr bool TRACK_INNER = TRACK ? not CP : false;
 
     Tensor<Scalar, TRank + 1, TRank + 1, Symmetry, TRACK> Q;
@@ -1757,6 +1861,7 @@ CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>::contractCorner(co
         });
     }
     return Q;
+#endif
 }
 
 } // namespace Xped
