@@ -16,6 +16,18 @@
 
 namespace Xped {
 
+namespace detail {
+// The dense sliced kernel uses real U0 components. Symmetric, complex,
+// fused-edge and all-out environments retain the tensor contraction path.
+template <typename Scalar, typename Symmetry, std::size_t TRank, bool ALL_OUT_LEGS, typename OpScalar>
+inline constexpr bool supports_sliced_energy =
+#ifdef XPED_USE_EIGEN_MATRIX_LIB
+    std::is_same_v<Scalar, double> && std::is_same_v<OpScalar, double> && Symmetry::Nq == 0 && TRank == 2 && !ALL_OUT_LEGS;
+#else
+    false;
+#endif
+} // namespace detail
+
 template <typename Scalar,
           typename Symmetry,
           std::size_t TRank,
@@ -37,6 +49,22 @@ template <typename Scalar,
           bool HERMITIAN>
 std::array<TMatrix<std::conditional_t<ENABLE_AD, stan::math::var, typename TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>::ObsScalar>>, 4>
 avg(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& env, TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>& op);
+
+// Exact interaction/physical/chi slicing. No precomputed RDM is needed by
+// the supported kernel; other tensor types use the original contractions.
+template <typename Scalar, typename Symmetry, std::size_t TRank, bool ALL_OUT_LEGS, bool ENABLE_AD,
+          Opts::CTMCheckpoint CPOpts, typename OpScalar, bool HERMITIAN>
+std::array<TMatrix<std::conditional_t<ENABLE_AD, stan::math::var, typename TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>::ObsScalar>>, 4>
+avg_sliced(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& env,
+           TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>& op, std::size_t block_size = 8);
+
+// Original RDM-based contraction. Disable the historical operator multiplet
+// cutoff to obtain an untruncated reference for the exact sliced evaluator.
+template <typename Scalar, typename Symmetry, std::size_t TRank, bool ALL_OUT_LEGS, bool ENABLE_AD,
+          Opts::CTMCheckpoint CPOpts, typename OpScalar, bool HERMITIAN>
+std::array<TMatrix<std::conditional_t<ENABLE_AD, stan::math::var, typename TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>::ObsScalar>>, 4>
+avg_unsliced(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& env,
+             TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>& op, bool preserve_operator_multiplets = true);
 
 template <typename Scalar, typename Symmetry, bool ENABLE_AD, typename OpScalar, bool HERMITIAN>
 TMatrix<std::conditional_t<ENABLE_AD, stan::math::var, typename OneSiteObservable<OpScalar, Symmetry, HERMITIAN>::ObsScalar>>
