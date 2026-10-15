@@ -33,6 +33,10 @@ To control the build, it is recomennded to choose a CMake preset so that several
 The available presets follow the scheme `<compiler>-<backend>-<build-type>`. E.g. `gcc-eigen-release` uses the gnu c++ compiler and the Eigen backend and performs a release build.
 Supported compilers are gcc (version >= 10), clang (version >= 12), msvc (version >= 19.30) and intel icpx (version >= 2021.04).
 
+For the Eigen backend, we recommend Intel MKL (`-DXPED_USE_MKL=ON`) for BLAS and LAPACK.
+The recommended SVD driver is LAPACK's divide-and-conquer `gesdd` (`dgesdd` for real double precision), selected through Eigen's `BDCSVD` when LAPACKE is enabled.
+The legacy `gesvd` path remains available by defining `XPED_DONT_USE_BDCSVD` at compile time.
+
 All build options can be seen in the following table.
 
 ### Build Options
