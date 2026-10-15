@@ -1,4 +1,5 @@
 #include "Xped/PEPS/LinearAlgebra.hpp"
+#include "Xped/PEPS/EnergySlicing.hpp"
 
 #include <limits>
 
@@ -121,7 +122,13 @@ TMatrix<std::conditional_t<ENABLE_AD, stan::math::var, typename OneSiteObservabl
 avg(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& env, OneSiteObservable<OpScalar, Symmetry, HERMITIAN>& op)
 {
     using ObsScalar = typename OneSiteObservable<OpScalar, Symmetry, HERMITIAN>::ObsScalar;
-    assert(env.RDM_COMPUTED());
+    // Energy-only solves do not allocate RDMs. Materialize a measurement
+    // environment on demand, preserving the caller's const environment.
+    if(!env.RDM_COMPUTED()) {
+        auto measured = env;
+        measured.template computeRDM<ENABLE_AD>();
+        return avg(measured, op);
+    }
     TMatrix<std::conditional_t<ENABLE_AD, stan::math::var, ObsScalar>> o(env.cell().pattern);
     o.setConstant(0.);
     if(not op.MEASURE) { return o; }
@@ -196,7 +203,7 @@ template <typename Scalar,
           typename OpScalar,
           bool HERMITIAN>
 std::array<TMatrix<std::conditional_t<ENABLE_AD, stan::math::var, typename TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>::ObsScalar>>, 4>
-avg(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& env, TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>& op)
+avg_unsliced(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& env, TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>& op, bool preserve_operator_multiplets)
 {
     assert(env.RDM_COMPUTED());
 
@@ -262,7 +269,7 @@ avg(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& en
                     auto norm = (half * half.adjoint()).trace();
                     [[maybe_unused]] double dumb;
                     auto [Hu, Hs, Hvdag] =
-                        shifted_op.data_d1(x, y).template permute<0, 0, 2, 1, 3>().tSVD(std::numeric_limits<std::size_t>::max(), 0., dumb);
+                        shifted_op.data_d1(x, y).template permute<0, 0, 2, 1, 3>().tSVD(std::numeric_limits<std::size_t>::max(), 0., dumb, preserve_operator_multiplets);
                     Hu = Hu * Hs.diag_sqrt().eval();
                     Hvdag = Hs.diag_sqrt().eval() * Hvdag;
                     auto C1T1 =
@@ -307,7 +314,7 @@ avg(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& en
                         if constexpr(TRank == 2) {
                             [[maybe_unused]] double dumb;
                             auto [Hu, Hs, Hvdag] =
-                                shifted_op.data_d1(x, y).template permute<0, 0, 2, 1, 3>().tSVD(std::numeric_limits<std::size_t>::max(), 0., dumb);
+                                shifted_op.data_d1(x, y).template permute<0, 0, 2, 1, 3>().tSVD(std::numeric_limits<std::size_t>::max(), 0., dumb, preserve_operator_multiplets);
                             Hu = Hu * Hs.diag_sqrt().eval();
                             Hvdag = Hs.diag_sqrt().eval() * Hvdag;
 
@@ -363,7 +370,7 @@ avg(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& en
                         if constexpr(TRank == 2) {
                             [[maybe_unused]] double dumb;
                             auto [Hu, Hs, Hvdag] = shifted_op.data_d2(x + 1, y).template permute<0, 0, 2, 1, 3>().tSVD(
-                                std::numeric_limits<std::size_t>::max(), 0., dumb);
+                                std::numeric_limits<std::size_t>::max(), 0., dumb, preserve_operator_multiplets);
                             Hu = Hu * Hs.diag_sqrt().eval();
                             Hvdag = Hs.diag_sqrt().eval() * Hvdag;
 
@@ -417,6 +424,56 @@ avg(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& en
         }
     }
     return std::array{o_h, o_v, o_d1, o_d2};
+}
+
+template <typename Scalar, typename Symmetry, std::size_t TRank, bool ALL_OUT_LEGS, bool ENABLE_AD,
+          Opts::CTMCheckpoint CPOpts, typename OpScalar, bool HERMITIAN>
+std::array<TMatrix<std::conditional_t<ENABLE_AD, stan::math::var, typename TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>::ObsScalar>>, 4>
+avg_sliced(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& env,
+           TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>& op, std::size_t block_size)
+{
+    if(block_size == 0) { throw std::invalid_argument("Energy slice block size must be positive"); }
+    if constexpr(detail::supports_sliced_energy<Scalar, Symmetry, TRank, ALL_OUT_LEGS, OpScalar>) {
+#ifdef XPED_USE_EIGEN_MATRIX_LIB
+        using Result = std::conditional_t<ENABLE_AD, stan::math::var, typename TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>::ObsScalar>;
+        TMatrix<Result> empty(env.cell().pattern);
+        empty.setConstant(0.);
+        std::array<TMatrix<Result>, 4> result{empty, empty, empty, empty};
+        if(!op.MEASURE) { return result; }
+        auto shifted = op.shiftQN(env.Psi()->charges());
+        for(int x = 0; x < env.cell().rows(); ++x) {
+            for(int y = 0; y < env.cell().cols(); ++y) {
+                if(!env.cell().pattern.isUnique(x, y)) { continue; }
+                auto evaluate = [&](const auto& term, auto& observations, Opts::Bond bond, std::size_t index, int ox) {
+                    if(term.size() == 0) { return; }
+                    auto value = detail::sliced_energy<ENABLE_AD>(env, term(ox, y), x, y, bond, block_size);
+                    result[index](x, y) = value;
+                    if constexpr(ENABLE_AD) { observations(x, y) = value.val(); }
+                    else { observations(x, y) = value; }
+                };
+                evaluate(shifted.data_h, op.obs_h, Opts::Bond::H, 0, x);
+                evaluate(shifted.data_v, op.obs_v, Opts::Bond::V, 1, x);
+                evaluate(shifted.data_d1, op.obs_d1, Opts::Bond::D1, 2, x);
+                // Preserve the existing D2 anchoring at the upper-right site.
+                evaluate(shifted.data_d2, op.obs_d2, Opts::Bond::D2, 3, x + 1);
+            }
+        }
+        return result;
+#endif
+    } else {
+        if(env.RDM_COMPUTED()) { return avg_unsliced(env, op); }
+        auto measured = env;
+        measured.template computeRDM<ENABLE_AD>();
+        return avg_unsliced(measured, op);
+    }
+}
+
+template <typename Scalar, typename Symmetry, std::size_t TRank, bool ALL_OUT_LEGS, bool ENABLE_AD,
+          Opts::CTMCheckpoint CPOpts, typename OpScalar, bool HERMITIAN>
+std::array<TMatrix<std::conditional_t<ENABLE_AD, stan::math::var, typename TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>::ObsScalar>>, 4>
+avg(XPED_CONST CTM<Scalar, Symmetry, TRank, ALL_OUT_LEGS, ENABLE_AD, CPOpts>& env, TwoSiteObservable<OpScalar, Symmetry, HERMITIAN>& op)
+{
+    return avg_sliced(env, op);
 }
 
 } // namespace Xped
