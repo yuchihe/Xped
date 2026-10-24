@@ -143,6 +143,53 @@ void check_basis_lifecycle(const Basis& first, const Basis& second)
     CHECK(basis.Nq() == 1);
 }
 
+// The full-cache prototype repairs remove()'s old iterator/offset bug.
+// Keep this regression separate: the unmodified 564e524 baseline fails it.
+template <typename Symmetry, std::size_t Depth>
+void check_remove_metadata(const Xped::Qbasis<Symmetry, Depth>& original)
+{
+    CHECK(original.Nq() >= 3);
+    if(original.Nq() < 3) return;
+    for(const std::size_t index : {std::size_t(0), original.Nq() / 2}) {
+        auto basis = original;
+        check_offsets(basis); // Populate any derived lookup metadata before removal.
+        const auto removed_q = original.qn(index);
+        const std::size_t removed_dim = original.inner_dim(removed_q);
+        const std::size_t expected_dim = original.dim() - removed_dim;
+        basis.remove(removed_q);
+        CHECK(!basis.IS_PRESENT(removed_q));
+        CHECK(basis.Nq() + 1 == original.Nq());
+        CHECK(basis.dim() == expected_dim);
+        CHECK(basis.fullDim() == original.fullDim() - removed_dim * Symmetry::degeneracy(removed_q));
+        std::size_t offset = 0;
+        for(const auto& q : original.qs()) {
+            if(q == removed_q) continue;
+            CHECK(basis.IS_PRESENT(q));
+            CHECK(basis.inner_dim(q) == original.inner_dim(q));
+            CHECK(basis.outer_num(q) == offset);
+            offset += original.inner_dim(q);
+        }
+        CHECK(offset == expected_dim);
+        check_offsets(basis);
+
+        const auto before_absent_remove = basis;
+        basis.remove(removed_q);
+        CHECK(basis == before_absent_remove);
+        CHECK(basis.dim() == expected_dim);
+        check_offsets(basis);
+
+        // Reinsertion also checks the internal current-dimension counter was reduced.
+        if constexpr(Depth == 1) basis.push_back(removed_q, removed_dim);
+        else basis.push_back(removed_q, removed_dim, original.tree(removed_q));
+        CHECK(basis.outer_num(removed_q) == expected_dim);
+        CHECK(basis.dim() == original.dim());
+        check_offsets(basis);
+        basis.sort();
+        CHECK(basis == original);
+        check_offsets(basis);
+    }
+}
+
 template <typename Left, typename Right>
 void check_product(const Left& left, const Right& right)
 {
@@ -320,6 +367,8 @@ void run_symmetry(const char* name, const Xped::Qbasis<Symmetry, 1>& b1, const X
 {
     const int before = failures;
     check_basis_lifecycle(b1, b2);
+    check_remove_metadata(b1);
+    check_remove_metadata(b1.combine(b2).combine(b1));
     check_forward<double>(b1, b2);
     check_forward<std::complex<double>>(b1, b2);
     check_ad<double>(b1);

@@ -299,8 +299,9 @@ void Qbasis<Symmetry, depth, AllocationPolicy>::remove(const qType& Q)
     auto it = find(Q);
     if(it != data_.end()) {
         auto dimQ = std::get<2>(*it).dim();
-        data_.erase(it);
-        for(auto loop = it++; loop == data_.end(); loop++) { std::get<1>(*loop) -= dimQ; }
+        it = data_.erase(it);
+        for(auto loop = it; loop != data_.end(); ++loop) { std::get<1>(*loop) -= dimQ; }
+        curr_dim -= dimQ;
     }
     trees.erase(Q);
     tree_offsets_.erase(Q);
