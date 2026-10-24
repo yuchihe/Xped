@@ -85,7 +85,9 @@ public:
                 m_sector.push_back(q);
                 m_dict.insert(std::make_pair(q, m_sector.size() - 1));
                 m_offsets.push_back(curr);
-                curr += m_domain.inner_dim(q) * m_codomain.inner_dim(q);
+                m_rows.push_back(plain.dim());
+                m_cols.push_back(m_codomain.inner_dim(q));
+                curr += m_rows.back() * m_cols.back();
             }
         }
         try {
@@ -112,13 +114,13 @@ public:
     cMapMatrixType block(std::size_t i) const
     {
         assert(i < m_offsets.size());
-        return cMapMatrixType(m_data.data() + m_offsets[i], m_domain.inner_dim(m_sector[i]), m_codomain.inner_dim(m_sector[i]));
+        return cMapMatrixType(m_data.data() + m_offsets[i], m_rows[i], m_cols[i]);
     }
 
     MapMatrixType block(std::size_t i)
     {
         assert(i < m_offsets.size());
-        return MapMatrixType(m_data.data() + m_offsets[i], m_domain.inner_dim(m_sector[i]), m_codomain.inner_dim(m_sector[i]));
+        return MapMatrixType(m_data.data() + m_offsets[i], m_rows[i], m_cols[i]);
     }
 
     cMapMatrixType block(qType q) const
@@ -163,10 +165,14 @@ public:
         if(m_offsets.size() == 0) {
             m_offsets.push_back(0);
         } else {
-            m_offsets.push_back(m_offsets.back() + m_domain.inner_dim(m_sector.back()) * m_codomain.inner_dim(m_sector.back()));
+            m_offsets.push_back(m_offsets.back() + m_rows.back() * m_cols.back());
         }
         m_sector.push_back(q);
         m_dict.insert(std::make_pair(q, m_sector.size() - 1));
+        m_rows.push_back(m_domain.inner_dim(q));
+        m_cols.push_back(m_codomain.inner_dim(q));
+        assert(static_cast<std::size_t>(PlainInterface::rows(M)) == m_rows.back());
+        assert(static_cast<std::size_t>(PlainInterface::cols(M)) == m_cols.back());
         m_data.insert(m_data.end(), M.data(), M.data() + M.size());
     }
 
@@ -186,6 +192,23 @@ public:
         m_sector.clear();
         m_dict.clear();
         m_offsets.clear();
+        m_rows.clear();
+        m_cols.clear();
+    }
+
+    template <typename Ar>
+    void serialize(Ar& ar) const
+    {
+        ar& YAS_OBJECT_NVP("x_storage",
+                           ("data", m_data),
+                           ("dict", m_dict),
+                           ("sectors", m_sector),
+                           ("uncoupled_domain", m_uncoupled_domain),
+                           ("uncoupled_codomain", m_uncoupled_codomain),
+                           ("domain", m_domain),
+                           ("codomain", m_codomain),
+                           ("world", m_world),
+                           ("offsets", m_offsets));
     }
 
     template <typename Ar>
@@ -201,6 +224,8 @@ public:
                            ("codomain", m_codomain),
                            ("world", m_world),
                            ("offsets", m_offsets));
+        // Derived metadata stays out of the archive, preserving existing files.
+        rebuild_block_dimensions();
     }
 
     const mpi::XpedWorld& world() const { return m_world; }
@@ -219,6 +244,20 @@ private:
     mpi::XpedWorld m_world;
 
     std::vector<std::size_t, typename AllocationPolicy::template Allocator<std::size_t>> m_offsets;
+    std::vector<std::size_t, typename AllocationPolicy::template Allocator<std::size_t>> m_rows;
+    std::vector<std::size_t, typename AllocationPolicy::template Allocator<std::size_t>> m_cols;
+
+    void rebuild_block_dimensions()
+    {
+        m_rows.clear();
+        m_cols.clear();
+        m_rows.reserve(m_sector.size());
+        m_cols.reserve(m_sector.size());
+        for(const auto& q : m_sector) {
+            m_rows.push_back(m_domain.inner_dim(q));
+            m_cols.push_back(m_codomain.inner_dim(q));
+        }
+    }
 
     void initialized_resize(const Scalar* data, std::size_t size)
     {
@@ -235,7 +274,9 @@ private:
                 m_sector.push_back(q);
                 m_dict.insert(std::make_pair(q, m_sector.size() - 1));
                 m_offsets.push_back(curr);
-                curr += m_domain.inner_dim(q) * m_codomain.inner_dim(q);
+                m_rows.push_back(plain.dim());
+                m_cols.push_back(m_codomain.inner_dim(q));
+                curr += m_rows.back() * m_cols.back();
             }
         }
         assert(curr == size and "You specified an incompatible data array for this tensor.");

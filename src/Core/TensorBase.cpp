@@ -272,7 +272,15 @@ TensorBase<Derived>::operator*(XPED_CONST TensorBase<OtherDerived>& other) XPED_
         //                 other_derived_ref.block(it->second).rows(),
         //                 other_derived_ref.block(it->second).cols());
         // } else {
+#ifdef XPED_USE_EIGEN_MATRIX_LIB
+        // Every sector appears at most once, and Tout owns fresh storage. Write
+        // the product directly; output sectors absent from either operand retain
+        // the zeros initialized above.
+        auto&& out_block = Tout.block(it_out->second);
+        PlainInterface::prod_into(out_block, derived_ref.block(i), other_derived_ref.block(it->second));
+#else
         Tout.block(it_out->second) += PlainInterface::prod(derived_ref.block(i), other_derived_ref.block(it->second));
+#endif
         // }
         // Tout.push_back(derived_ref.sector(i), PlainInterface::prod<Scalar>(derived_ref.block(i), other_derived_ref.block(it->second)));
         // Tout.block_[i] = T1.block_[i] * T2.block_[it->second];
