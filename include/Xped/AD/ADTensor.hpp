@@ -707,7 +707,7 @@ operator*(const Tensor<Scalar, Rank, MiddleRank, Symmetry, false>& left, const T
     if constexpr(TRACK) {
         Tensor<std::common_type_t<Scalar, OtherScalar>, Rank, CoRank, Symmetry, true> res(left * right.val());
         Xped::reverse_pass_callback_alloc([res, left, right]() mutable {
-            right.adj() += (left.adjoint() * res.adj());
+            internal::add_product_noalias(right.adj(), left.adjoint(), res.adj());
             SPDLOG_WARN("reverse t*vt with t={} and vt={}, input adj norm={}, output adj norm={}",
                         left.name(),
                         right.name(),
@@ -727,7 +727,7 @@ operator*(const Tensor<Scalar, Rank, MiddleRank, Symmetry, true>& left, const Te
     if constexpr(TRACK) {
         Tensor<std::common_type_t<Scalar, OtherScalar>, Rank, CoRank, Symmetry, true> res(left.val() * right);
         Xped::reverse_pass_callback_alloc([res, left, right]() mutable {
-            left.adj() += res.adj() * right.adjoint();
+            internal::add_product_noalias(left.adj(), res.adj(), right.adjoint());
             SPDLOG_WARN("reverse vt*t with vt={} and t={}, input adj norm={}, output adj norm={}",
                         left.name(),
                         right.name(),
@@ -747,8 +747,8 @@ operator*(const Tensor<Scalar, Rank, MiddleRank, Symmetry, true>& left, const Te
     if constexpr(TRACK) {
         Tensor<std::common_type_t<Scalar, OtherScalar>, Rank, CoRank, Symmetry, true> res(left.val() * right.val());
         stan::math::reverse_pass_callback([res, left, right]() mutable {
-            right.adj() += (left.val().adjoint() * res.adj());
-            left.adj() += res.adj() * right.val().adjoint();
+            internal::add_product_noalias(right.adj(), left.val().adjoint(), res.adj());
+            internal::add_product_noalias(left.adj(), res.adj(), right.val().adjoint());
             SPDLOG_WARN("reverse vt*vt with vtl={} and vtr={}, in adj norm={}, vtl adj norm={}, vtr adj norm={}",
                         left.name(),
                         right.name(),

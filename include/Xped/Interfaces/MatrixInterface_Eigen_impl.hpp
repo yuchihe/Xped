@@ -110,6 +110,25 @@ struct MatrixInterface
     static MType<std::common_type_t<typename DerivedL::Scalar, typename DerivedR::Scalar>> prod(const Eigen::MatrixBase<DerivedL>& M1,
                                                                                                 const Eigen::MatrixBase<DerivedR>& M2);
 
+    // The destination must not overlap either operand. Unlike prod(), these
+    // operations do not materialize an owning matrix for the product. Keep the
+    // bodies visible for arbitrary Eigen expressions in compiled-library mode.
+    template <typename DerivedOut, typename DerivedL, typename DerivedR>
+    static void prod_into(Eigen::MatrixBase<DerivedOut>& out,
+                          const Eigen::MatrixBase<DerivedL>& M1,
+                          const Eigen::MatrixBase<DerivedR>& M2)
+    {
+        out.noalias() = M1 * M2;
+    }
+
+    template <typename DerivedOut, typename DerivedL, typename DerivedR>
+    static void prod_add_into(Eigen::MatrixBase<DerivedOut>& out,
+                              const Eigen::MatrixBase<DerivedL>& M1,
+                              const Eigen::MatrixBase<DerivedR>& M2)
+    {
+        out.noalias() += M1 * M2;
+    }
+
     template <typename Scalar, typename MatrixExpr1, typename MatrixExpr2, typename MatrixExpr3, typename MatrixExprRes>
     static void optimal_prod(const Scalar& scale, const MatrixExpr1& M1, const MatrixExpr2& M2, const MatrixExpr3& M3, MatrixExprRes& Mres);
 

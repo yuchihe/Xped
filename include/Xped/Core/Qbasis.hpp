@@ -55,9 +55,60 @@ class Qbasis
             std::pair<const qType,
                       std::vector<FusionTree<depth, Symmetry>, typename AllocationPolicy::template Allocator<FusionTree<depth, Symmetry>>>>>>;
 
+    // Match FusionTree::operator==, which deliberately ignores duality outside
+    // pedantic builds and ignores multiplicities for multiplicity-free symmetries.
+    struct OffsetTreeHash
+    {
+        std::size_t operator()(const FusionTree<depth, Symmetry>& tree) const
+        {
+            std::size_t seed = 0;
+            boost::hash_combine(seed, tree.dims);
+            if constexpr(not Symmetry::ALL_IS_TRIVIAL) {
+                boost::hash_combine(seed, tree.q_uncoupled);
+                boost::hash_combine(seed, tree.q_coupled);
+                boost::hash_combine(seed, tree.q_intermediates);
+                if constexpr(Symmetry::ANY_HAS_MULTIPLICITIES) { boost::hash_combine(seed, tree.multiplicities); }
+#ifdef XPED_PEDANTIC_ASSERTS
+                boost::hash_combine(seed, tree.IS_DUAL);
+#endif
+            }
+            return seed;
+        }
+    };
+    using TreeOffsets = std::pair<std::size_t, std::size_t>;
+    using TreeOffsetMap = std::unordered_map<FusionTree<depth, Symmetry>,
+                                           TreeOffsets,
+                                           OffsetTreeHash,
+                                           std::equal_to<FusionTree<depth, Symmetry>>,
+                                           typename AllocationPolicy::template Allocator<std::pair<const FusionTree<depth, Symmetry>, TreeOffsets>>>;
+    using OffsetMap = std::unordered_map<qType,
+                                         TreeOffsetMap,
+                                         std::hash<qType>,
+                                         std::equal_to<qType>,
+                                         typename AllocationPolicy::template Allocator<std::pair<const qType, TreeOffsetMap>>>;
+
 public:
     /**Does nothing.*/
     Qbasis() = default;
+    Qbasis(const Qbasis&) = default;
+    Qbasis(Qbasis&&) = default;
+
+    Qbasis& operator=(Qbasis other)
+    {
+        // An earlier allTrees() reference still names this object's map after
+        // assignment; replacing the contents cannot make caching safe again.
+        const bool cache_offsets = cache_tree_offsets_ and other.cache_tree_offsets_;
+        using std::swap;
+        swap(data_, other.data_);
+        swap(curr_dim, other.curr_dim);
+        swap(trees, other.trees);
+        swap(tree_offsets_, other.tree_offsets_);
+        swap(IS_SORTED_, other.IS_SORTED_);
+        swap(CONJ, other.CONJ);
+        cache_tree_offsets_ = cache_offsets;
+        if(not cache_tree_offsets_) { tree_offsets_.clear(); }
+        return *this;
+    }
 
     /**
      * Inserts all quantum numbers in the Container \p qins with constant dimension \p dim into the basis.
@@ -189,6 +240,7 @@ public:
     {
         data_.clear();
         trees.clear();
+        tree_offsets_.clear();
         curr_dim = 0;
     }
 
@@ -244,12 +296,27 @@ public:
         return it->second;
     }
 
-    inline TreeType& allTrees() { return trees; }
+    inline TreeType& allTrees()
+    {
+        // The caller can retain this reference and mutate again after an offset
+        // lookup. Keep the original scan path for this object's remaining life.
+        cache_tree_offsets_ = false;
+        tree_offsets_.clear();
+        return trees;
+    }
+
+    template <typename Ar>
+    void serialize(Ar& ar) const
+    {
+        ar& YAS_OBJECT_NVP("Qbasis", ("data", data_), ("curr_dim", curr_dim), ("trees", trees), ("IS_SORTED", IS_SORTED_), ("CONJ", CONJ));
+    }
 
     template <typename Ar>
     void serialize(Ar& ar)
     {
         ar& YAS_OBJECT_NVP("Qbasis", ("data", data_), ("curr_dim", curr_dim), ("trees", trees), ("IS_SORTED", IS_SORTED_), ("CONJ", CONJ));
+        // Derived metadata is rebuilt, not serialized, to keep archive compatibility.
+        rebuild_tree_offsets();
     }
 
 private:
@@ -262,6 +329,12 @@ private:
     ContainerType data_{};
     std::size_t curr_dim = 0;
     TreeType trees{};
+    OffsetMap tree_offsets_{};
+    bool cache_tree_offsets_ = true;
+
+    // Eager updates keep concurrent const offset queries read-only.
+    void rebuild_tree_offsets(const qType& q);
+    void rebuild_tree_offsets();
 
     bool IS_SORTED_ = false;
     bool CONJ = false;

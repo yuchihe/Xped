@@ -1,6 +1,11 @@
 #ifndef XPED_BASE_H_
 #define XPED_BASE_H_
 
+#include <type_traits>
+#include <utility>
+
+#include <assert.hpp>
+
 #include "Xped/Interfaces/PlainInterface.hpp"
 
 namespace Xped {
@@ -146,6 +151,44 @@ protected:
     // inline const Derived& derived() const { return *static_cast<const Derived*>(this); }
     // inline Derived& derived() { return *static_cast<Derived*>(this); }
 };
+
+namespace internal {
+
+// Internal accumulation for AD pullbacks. The destination already has the
+// product's layout and must not share numeric storage with either operand.
+// Tensor values and their adjoints have separate buffers, including when both
+// operand handles refer to the same AD node.
+template <typename Destination, typename Left, typename Right>
+void add_product_noalias(Destination& destination, Left&& left, Right&& right)
+{
+#ifdef XPED_USE_EIGEN_MATRIX_LIB
+    static_assert(Destination::Rank == std::remove_reference_t<Left>::Rank);
+    static_assert(Destination::CoRank == std::remove_reference_t<Right>::CoRank);
+    static_assert(std::remove_reference_t<Left>::CoRank == std::remove_reference_t<Right>::Rank);
+    DEBUG_ASSERT(left.world() == right.world());
+    DEBUG_ASSERT(destination.world() == left.world());
+    DEBUG_ASSERT(left.coupledCodomain() == right.coupledDomain());
+    DEBUG_ASSERT(destination.coupledDomain() == left.coupledDomain());
+    DEBUG_ASSERT(destination.coupledCodomain() == right.coupledCodomain());
+
+    const auto& sectors = left.sector();
+    const auto& right_dict = right.dict();
+    const auto& destination_dict = destination.dict();
+    for(std::size_t i = 0; i < sectors.size(); ++i) {
+        const auto right_it = right_dict.find(sectors[i]);
+        if(right_it == right_dict.end()) { continue; }
+        const auto destination_it = destination_dict.find(sectors[i]);
+        assert(destination_it != destination_dict.end());
+        auto&& out_block = destination.block(destination_it->second);
+        PlainInterface::prod_add_into(out_block, left.block(i), right.block(right_it->second));
+    }
+#else
+    // Preserve the original backend path when no direct product kernel exists.
+    destination += std::forward<Left>(left) * std::forward<Right>(right);
+#endif
+}
+
+} // namespace internal
 
 template <typename DerivedLeft, typename DerivedRight>
 XPED_CONST CoeffBinaryOp<DerivedLeft, DerivedRight> operator+(XPED_CONST TensorBase<DerivedLeft>& left, XPED_CONST TensorBase<DerivedRight>& right)

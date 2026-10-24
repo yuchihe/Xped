@@ -70,6 +70,7 @@ void Qbasis<Symmetry, depth, AllocationPolicy>::push_back(const qType& q, const 
         }
     }
     curr_dim += inner_dim;
+    rebuild_tree_offsets(q);
 }
 
 template <typename Symmetry, std::size_t depth, typename AllocationPolicy>
@@ -88,6 +89,7 @@ void Qbasis<Symmetry, depth, AllocationPolicy>::push_back(const qType& q, const 
         assert(false);
     }
     curr_dim += inner_dim;
+    rebuild_tree_offsets(q);
 }
 
 template <typename Symmetry, std::size_t depth, typename AllocationPolicy>
@@ -206,9 +208,48 @@ size_t Qbasis<Symmetry, depth, AllocationPolicy>::inner_dim(const size_t& num_in
 }
 
 template <typename Symmetry, std::size_t depth, typename AllocationPolicy>
+void Qbasis<Symmetry, depth, AllocationPolicy>::rebuild_tree_offsets(const qType& q)
+{
+    // A one-leg sector has only one tree; scanning it is cheaper than caching it.
+    if constexpr(depth < 2) { return; }
+    tree_offsets_.erase(q);
+    if(not cache_tree_offsets_) { return; }
+    const auto it = trees.find(q);
+    if(it == trees.end()) { return; }
+    TreeOffsetMap offsets;
+    offsets.reserve(it->second.size());
+    std::size_t total = 0;
+    for(const auto& tree : it->second) {
+        auto entry = offsets.try_emplace(tree, TreeOffsets{total, 0}).first;
+        // Accumulate all equal entries so even duplicate histories retain the
+        // original leftOffset (first match) and rightOffset (skip equal entries).
+        entry->second.second += tree.dim;
+        total += tree.dim;
+    }
+    for(auto& [tree, offset] : offsets) { offset.second = total - offset.first - offset.second; }
+    tree_offsets_.emplace(q, std::move(offsets));
+}
+
+template <typename Symmetry, std::size_t depth, typename AllocationPolicy>
+void Qbasis<Symmetry, depth, AllocationPolicy>::rebuild_tree_offsets()
+{
+    tree_offsets_.clear();
+    if constexpr(depth < 2) { return; }
+    if(not cache_tree_offsets_) { return; }
+    for(const auto& [q, history] : trees) { rebuild_tree_offsets(q); }
+}
+
+template <typename Symmetry, std::size_t depth, typename AllocationPolicy>
 size_t Qbasis<Symmetry, depth, AllocationPolicy>::leftOffset(const FusionTree<depth, Symmetry>& tree, const std::array<size_t, depth>& plain) const
 {
     assert(trees.size() == data_.size() and "The history for this basis is not defined properly");
+    if constexpr(depth >= 2) {
+        const auto sector = tree_offsets_.find(tree.q_coupled);
+        if(sector != tree_offsets_.end()) {
+            const auto offset = sector->second.find(tree);
+            if(offset != sector->second.end()) { return offset->second.first; }
+        }
+    }
     auto it = trees.find(tree.q_coupled);
     assert(it != trees.end() and "The history for this basis is not defined properly");
     size_t out = 0;
@@ -229,9 +270,15 @@ size_t Qbasis<Symmetry, depth, AllocationPolicy>::rightOffset(const FusionTree<d
 {
     assert(trees.size() == data_.size() and "The history for this basis is not defined properly");
 
+    if constexpr(depth >= 2) {
+        const auto sector = tree_offsets_.find(tree.q_coupled);
+        if(sector != tree_offsets_.end()) {
+            const auto offset = sector->second.find(tree);
+            if(offset != sector->second.end()) { return offset->second.second; }
+        }
+    }
     auto it = trees.find(tree.q_coupled);
     assert(it != trees.end() and "The history for this basis is not defined properly");
-
     size_t out = 0;
     bool SWITCH = false;
 
@@ -256,6 +303,7 @@ void Qbasis<Symmetry, depth, AllocationPolicy>::remove(const qType& Q)
         for(auto loop = it++; loop == data_.end(); loop++) { std::get<1>(*loop) -= dimQ; }
     }
     trees.erase(Q);
+    tree_offsets_.erase(Q);
     // std::get<2>(*it) = std::get<2>(*it).add(Basis(inner_dim));
     // for (auto& [p,tree] : trees) {
     //         if (p != q) {continue;}
@@ -296,6 +344,7 @@ void Qbasis<Symmetry, depth, AllocationPolicy>::truncate(const std::unordered_se
                 assert(it->second.size() == 1);
                 it->second[0].dims[0] = Deff;
                 it->second[0].dim = Deff;
+                rebuild_tree_offsets(std::get<0>(data_[i]));
             }
             auto dims = this->dims();
             std::get<1>(data_[i]) = std::accumulate(dims.begin(), dims.begin() + i, 0ul);
@@ -306,6 +355,7 @@ void Qbasis<Symmetry, depth, AllocationPolicy>::truncate(const std::unordered_se
 template <typename Symmetry, std::size_t depth, typename AllocationPolicy>
 std::vector<std::size_t> Qbasis<Symmetry, depth, AllocationPolicy>::sort()
 {
+    // Only sector order changes here; each sector's tree order and offsets stay valid.
     if(data_.size() < 2) { return std::vector<std::size_t>({0}); }
     std::vector<std::size_t> index_sort(data_.size());
     std::iota(index_sort.begin(), index_sort.end(), 0);

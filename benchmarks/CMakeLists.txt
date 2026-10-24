@@ -6,3 +6,8 @@ if((CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_
   message(STATUS "Adding explicit linker flag for cpp-17 std::filesystem.")
   target_link_libraries(benchmark stdc++fs)
 endif()
+
+if(XPED_USE_AD AND XPED_MATRIX_LIB STREQUAL "Eigen" AND XPED_STORAGE STREQUAL "Contiguous")
+  add_executable(stripe_u1_performance stripe_u1_performance.cpp)
+  target_link_libraries(stripe_u1_performance PRIVATE Xped)
+endif()
